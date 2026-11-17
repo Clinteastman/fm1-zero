@@ -76,7 +76,7 @@ class UiTests(unittest.TestCase):
                          ["Sample Synth", "Evil", "External Installer"])
         press(app, "/", "g", "r", "o", "o", "v", "e", "enter")
         self.assertEqual([i.label for i in app.stack[-1].items(app)], ["External Installer"])
-        press(app, "/", *["backspace"] * 6, "enter", "f")
+        press(app, "s", *["backspace"] * 6, "enter", "l")
         self.assertEqual(app.store.favourites, {"sample-fw"})
         press(app, "esc", "esc", "esc")
         self.assertIsInstance(app.stack[-1], ui.Home)
@@ -319,7 +319,7 @@ class UiTests(unittest.TestCase):
         clock.t += 2.1
         app.step(0)
         finish(app)
-        self.assertEqual(app.firmware_name(), "Sample Synth 1.2.3 (FM-1_123)")
+        self.assertEqual(app.firmware_name(), "Sample Synth 1.2.3")
         app.home()
         ui.start_backup(app)
         finish(app)
@@ -342,6 +342,26 @@ class UiTests(unittest.TestCase):
         app.store.state["flash"] = ""
         press(app, "u")
         self.assertEqual(app.stack[-1].title, "This unit only")  # not known yet: says how to find out
+    def test_everything_works_from_keys_the_cardputerzero_has_without_a_layer(self):
+        """Letters, Enter, Esc and Tab only: no arrows, no ; . or /."""
+        app, _ = make_app(self.dir.name)
+        press(app, "x", "x", "f")
+        self.assertEqual(app.stack[-1].sel, 1)  # down, down, up
+        press(app, "f", "enter")
+        self.assertIsInstance(app.stack[-1], ui.Browse)
+        press(app, "x")
+        self.assertEqual(app.stack[-1].sel, 1)
+        press(app, "o")
+        self.assertEqual(app.filters["sort"], "name")
+        press(app, "g", "c", "z", "c")
+        self.assertIsInstance(app.stack[-1], ui.Grid)
+        self.assertEqual(app.stack[-1].sel, 2)
+        press(app, "g", "tab")
+        self.assertTrue(app.stack[-1].downloaded)
+        press(app, "esc")
+        self.assertIsInstance(app.stack[-1], ui.Home)
+        for screen_hint in (ui.Home.hint, ui.Browse.hint, ui.Browse.hint2, ui.Grid.hint):
+            self.assertFalse(set(";./`") & set(screen_hint.replace("F/X/Z/C", "").replace("F/X", "")), screen_hint)
 
 if __name__ == "__main__":
     unittest.main()

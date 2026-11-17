@@ -10,7 +10,7 @@ this is a Python app instead of firmware.
 
 ![The app's screens at 320x170, with stand-in art for the firmware pictures](shots/sheet.png)
 
-**Status: not yet run on real hardware.** The logic passes 76 tests against a pretend FM-1, the package reader matches
+**Status: not yet run on real hardware.** The logic passes 77 tests against a pretend FM-1, the package reader matches
 two real maker releases, and the catalogue code has read the real Hub list. The USB side has never touched an FM-1.
 Follow [First run](#first-run-prove-it-in-this-order) before trusting it.
 
@@ -108,7 +108,7 @@ The `packaging/` folder is laid out as its Python example's is. This has not bee
 Do [Recovery](#recovery-set-this-up-before-the-first-install) first. Then do these over SSH, with the FM-1 plugged into the CardputerZero by a data cable and switched on. Each step risks
 more than the one before, so stop at the first one that goes wrong and send me what it printed.
 
-1. `python3 -m unittest discover -s tests -t .` : the 76 tests pass on the CardputerZero itself.
+1. `python3 -m unittest discover -s tests -t .` : the 77 tests pass on the CardputerZero itself.
 2. `python3 -m fm1zero status` : lists MIDI devices and what the FM-1 says it is. Writes nothing, restarts nothing.
 3. `python3 -m fm1zero info` : sends the FM-1 to its boot loader, loads the flash loader into its RAM, asks the chip
    what it is, and restarts it. Writes nothing to flash. This proves the whole USB path.
@@ -130,24 +130,29 @@ and a backup from a different FM-1 are each refused with nothing written.
 
 | Key | Does |
 |---|---|
-| Arrows, or `;` and `.` | move |
+| `F` and `X` | up and down. These are the arrow keys (Fn + F, Fn + X); they work with or without Fn |
+| `Z` and `C` | left and right in the grid, a page up and down in a list |
 | Enter | open, choose |
-| Esc or `` ` `` | back |
-| `/` | search (Discover and Downloaded) |
-| `F` | favourite the highlighted firmware |
+| Esc | back |
+| `S` | search (Discover and Downloaded) |
 | `G` | Discover as a grid of pictures, and back |
-| `P` | on a firmware's page: its picture |
-| `S` | sort: popular, name |
+| `L` | favourite the highlighted firmware |
+| `O` | sort: popular, name |
 | `K` | show one kind (synth, drums, groove ...) |
 | `V` | favourites only |
 | `U` | this unit only: hides firmwares that don't suit your FM-1's flash chip |
+| `P` | on a firmware's page: its picture |
 | Tab | switch Discover and Downloaded |
 | **Hold Enter 2 s** | confirm an install, a restore or a delete. Esc cancels |
 | `B` | on the install question: make a backup first |
 | `R` | after a write that stopped part way: run it again. Enter does nothing there, on purpose |
 
-The key names assume the CardputerZero's keyboard looks like an ordinary keyboard to Linux. If a key does nothing,
-that mapping (`fm1zero/hw.py`) is the place to look.
+Every key is on the CardputerZero's base layer: letters, Enter, Esc and Tab. Nothing needs Fn or Sym. The layout
+is taken from M5Stack's [Emulator](https://github.com/CardputerZero/Emulator) (`src/keyboard_map.h`), which has
+the arrows on Fn + F, X, Z, C and `;` `.` `/` on the Sym layer.
+
+That layout comes from the emulator, not from a real unit. If a key does nothing on yours, the mapping in
+`fm1zero/hw.py` is the place to look.
 
 Files live in `~/.local/share/fm1zero/`: `packages/`, `backups/`, `cards/` (pictures, kept once fetched),
 `catalogue.json`, `state.json`.

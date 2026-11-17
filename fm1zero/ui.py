@@ -3,7 +3,7 @@
 Screens are a stack: Enter goes in, Esc comes back. Anything that writes to the
 FM-1 or deletes a file asks first, and wants Enter held for two seconds.
 
-Keys in a list: arrows (or ; and .) move, Enter opens, Esc (or `) goes back.
+Keys in a list: F and X move (the arrows, with or without Fn), Enter opens, Esc goes back.
 """
 
 from __future__ import annotations
@@ -19,12 +19,18 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import __version__, boot, catalogue, device, jobs, pkg as pkgmod
 from .hw import H, W
+from .rom import FM1_FLASHES
 from .store import Saved, Store
 
 BG, FG, DIM, ACCENT, BAR, BAD, GOOD = "#101014", "#e8e8e8", "#b4b4be", "#ffb000", "#26262e", "#ff5a4a", "#5ad26a"
-MAP_COLOURS = ["#26262e", "#ffb000", "#5ad26a", "#3f8f4c", "#3fb6d6", "#ff5a4a"]
+MAP_COLOURS = ["#26262e", "#ffb000", "#5ad26a", "#4a9a8c", "#3fb6d6", "#ff5a4a"]
 LABEL_W = 86  # where a "label<tab>value" line's value starts
 HOLD_S = 2.0
+FLASH_NAMES = {"%06X" % ident: name for ident, name in FM1_FLASHES.items()}
+# Moving. The CardputerZero has no arrow keys of its own: they are Fn + F, X, Z and C. The same four
+# keys move here without Fn too, so nothing needs a layer. (; and . are kept for a USB keyboard.)
+UP, DOWN = ("up", "f", "F", ";"), ("down", "x", "X", ".")
+LEFT, RIGHT = ("left", "pageup", "z", "Z"), ("right", "pagedown", "c", "C")
 ROWS = 8
 ROW_H = 16
 TOP = 20
@@ -175,7 +181,7 @@ class Screen:
         pass
 
     def key(self, app, key: str) -> None:
-        if key in ("esc", "`"):
+        if key == "esc":
             app.pop()
 
     def release(self, app, key: str) -> None:
@@ -186,7 +192,7 @@ class Screen:
 
 
 class ListScreen(Screen):
-    hint = "Enter open  Esc back"
+    hint = "F/X move  Enter open  Esc back"
     hint2 = ""  # a second row of keys, above the first, for the screens with many
 
     def __init__(self, title: str, items: list[Item] | None = None, empty: str = "Nothing here."):
@@ -224,13 +230,13 @@ class ListScreen(Screen):
 
     def key(self, app, key: str) -> None:
         items = self.items(app)
-        if key in ("up", ";"):
+        if key in UP:
             self.sel = (self.sel - 1) % max(1, len(items))
-        elif key in ("down", "."):
+        elif key in DOWN:
             self.sel = (self.sel + 1) % max(1, len(items))
-        elif key in ("pageup", "left"):
+        elif key in LEFT:
             self.sel = max(0, self.sel - ROWS)
-        elif key in ("pagedown", "right"):
+        elif key in RIGHT:
             self.sel = min(max(0, len(items) - 1), self.sel + ROWS)
         elif key == "enter" and items and items[self.sel].action:
             items[self.sel].action(app, items[self.sel])
@@ -258,7 +264,7 @@ class TextScreen(Screen):
         return " ".join(text for text, _colour in self.parts)
 
     def draw(self, app, c: Canvas) -> None:
-        c.frame(self.title, self.hint + ("  ;/. scroll" if self.more else ""), colour=self.title_colour)
+        c.frame(self.title, ("F/X scroll  " if self.more else "") + self.hint, colour=self.title_colour)
         shown, total = c.sections(self.parts, self.top)
         self.more = total > shown or self.top > 0
         self.top = max(0, min(self.top, total - 1))
@@ -267,9 +273,9 @@ class TextScreen(Screen):
     def key(self, app, key: str) -> None:
         if key.lower() in self.keys:
             self.keys[key.lower()](app)
-        elif key in ("up", ";"):
+        elif key in UP:
             self.top = max(0, self.top - 1)
-        elif key in ("down", ".") and self.more:
+        elif key in DOWN and self.more:
             self.top += 1
         elif key == "enter" and self.on_enter:
             self.on_enter(app)
@@ -375,13 +381,13 @@ class Work(Screen):
                 c.d.text((8, 92 + i * 14), line, font=c.font, fill=ACCENT)
             failed = sum(1 for state in p.states if state == 5)
             if failed:
-                c.d.text((8, 124), "%d sector%s failed: trying again" % (failed, "" if failed == 1 else "s"),
-                         font=c.font, fill=BAD)
+                c.d.text((8, 124), "%d sector%s retrying" % (failed, "" if failed == 1 else "s"),
+                         font=c.font, fill=ACCENT)
             for s in range(256):  # the flash: 16 x 16 sectors of 4 KiB
                 x, y = W - 104 + (s % 16) * 6, TOP + 4 + (s // 16) * 6
                 c.d.rectangle([x, y, x + 4, y + 4], fill=MAP_COLOURS[min(p.states[s], 5)])
             x = W - 104
-            for colour, word in ((MAP_COLOURS[2], "wrote"), (MAP_COLOURS[3], "same"), (MAP_COLOURS[5], "failed")):
+            for colour, word in ((MAP_COLOURS[2], "wrote"), (MAP_COLOURS[3], "same"), (MAP_COLOURS[5], "retry")):
                 c.d.rectangle([x, 126, x + 4, 130], fill=colour)
                 c.d.text((x + 7, 122), word, font=c.small, fill=DIM)
                 x += 10 + c.small.getlength(word)
@@ -412,9 +418,10 @@ class Work(Screen):
             parts = [("Stopped part way: the FM-1 is half written.", BAD),
                      ("Keep it on and plugged in. Press R to run it again now.", FG),
                      ("If it gets switched off and won't start: " + how, DIM),
-                     (self.result, DIM)]
+                     ("Detail: " + self.result, DIM)]
             keys = {"r": lambda app: (app.pop(), self.again(app))} if self.again else {}
-            return TextScreen("Failed", parts, hint=("R run it again  " if self.again else "") + "Esc back",
+            return TextScreen("Failed", parts,
+                              hint=("R run it again  " if self.again else "") + "Esc leave it half written",
                               title_colour=BAD, keys=keys, enter_leaves=False)
         return TextScreen("Failed", [("Nothing was written to the FM-1." if self.with_map else "It didn't work.", BAD),
                                      (self.result, FG)], hint="Enter/Esc back", title_colour=BAD)
@@ -525,8 +532,8 @@ class Picture(Screen):
 class Browse(ListScreen):
     """The Hub's list (Discover), or only what is downloaded."""
 
-    hint = ";/. move  Enter open  Esc back  Tab saved"
-    hint2 = "/ find  G grid  F fav  S sort  K kind  U unit"
+    hint = "F/X move  Enter open  Esc back  Tab saved"
+    hint2 = "S find  G grid  L fav  O sort  K kind  U unit"
 
     def __init__(self, downloaded: bool = False):
         super().__init__("")
@@ -545,7 +552,7 @@ class Browse(ListScreen):
         out = []
         if self.downloaded:
             self.title = "Downloaded"
-            self.hint, self.hint2 = ";/. move  Enter open  Esc back", "/ find  F fav  Tab Discover"
+            self.hint, self.hint2 = "F/X move  Enter open  Esc back", "S find  L fav  Tab Discover"
             self.empty = "No packages yet. Download one from Discover, or copy .fwsc files into packages/."
             words = f["search"].lower().split()
             for saved in app.store.packages():
@@ -578,19 +585,19 @@ class Browse(ListScreen):
     def key(self, app, key: str) -> None:
         f = app.filters
         items = self.items(app)
-        if key == "/":
+        if key in ("s", "S", "/"):
             app.push(Search(lambda text: f.update(search=text), f["search"]))
         elif key == "tab":
             app.pop()
             app.push(Browse(not self.downloaded))
         elif key in ("g", "G") and not self.downloaded:
             self.swap(app, Grid(False))
-        elif key in ("s", "S") and not self.downloaded:
+        elif key in ("o", "O") and not self.downloaded:
             f["sort"] = catalogue.SORTS[(catalogue.SORTS.index(f["sort"]) + 1) % len(catalogue.SORTS)]
         elif key in ("k", "K") and not self.downloaded:
             kinds = [""] + catalogue.kinds(app.entries)
             f["kind"] = kinds[(kinds.index(f["kind"]) + 1) % len(kinds)] if f["kind"] in kinds else ""
-        elif key in ("f", "F") and items:
+        elif key in ("l", "L") and items:
             data = items[self.sel].data
             ident = data.meta.get("id") if isinstance(data, Saved) else data["id"]
             if ident:
@@ -611,7 +618,7 @@ class Grid(Browse):
     """Discover as pictures: three across, two down. The same list, filters and keys as the list view."""
 
     live = True
-    hint = "Arrows move  Enter open  G list  Esc back"
+    hint = "F/X/Z/C move  Enter open  G list  Esc back"
     hint2 = ""
 
     def draw(self, app, c: Canvas) -> None:
@@ -645,13 +652,13 @@ class Grid(Browse):
 
     def key(self, app, key: str) -> None:
         count = max(1, len(self.items(app)))
-        if key == "left":
+        if key in ("left", "z", "Z"):
             self.sel = (self.sel - 1) % count
-        elif key == "right":
+        elif key in ("right", "c", "C"):
             self.sel = (self.sel + 1) % count
-        elif key in ("up", ";"):
+        elif key in UP:
             self.sel = max(0, self.sel - COLS)
-        elif key in ("down", "."):
+        elif key in DOWN:
             self.sel = min(count - 1, self.sel + COLS)
         elif key in ("pageup", "pagedown"):
             self.sel = max(0, min(count - 1, self.sel + (COLS * GRID_ROWS if key == "pagedown" else -COLS * GRID_ROWS)))
@@ -766,7 +773,7 @@ def start_download(app, e: dict) -> None:
 def said(result) -> list:
     """What to tell the user once the FM-1 has restarted: blocks of (text, colour)."""
     if result.after:
-        return [("It is safe to unplug.", FG), ("The FM-1 restarted and says it is %s." % result.after, DIM)]
+        return [("It is safe to unplug.", FG), ("The FM-1 restarted. Its firmware answers as %s." % result.after, DIM)]
     return [("The FM-1 didn't answer after restarting: look at its own screen.", ACCENT)]
 
 
@@ -805,7 +812,7 @@ def install_question(app, saved: Saved) -> None:
         work.say("Writing " + name)
         result = device.install(package, rule, work.report, work.say)
         app.saw(result, installed=name)
-        return [("Installed %s." % name, GOOD),
+        return [("Installed %s" % name, GOOD),
                 ("%d sectors written and read back." % result.written, FG)] + said(result)
 
     def start(app):
@@ -839,7 +846,7 @@ def start_backup(app, _item=None) -> None:
 
 
 class Backups(ListScreen):
-    hint = "Enter options  Esc back"
+    hint = "F/X move  Enter options  Esc back"
 
     def __init__(self):
         super().__init__("Backups", empty="No backups yet. Choose Create backup on the first screen.")
@@ -885,8 +892,9 @@ def show_device(app, _item=None) -> None:
         chip = result.chip
         app.saw(result)
         return [("FM-1 checked. Nothing was written.", GOOD),
-                ("Firmware\t%s\nBootloader\t%s\nRecovery\t%s" % (
-                    app.firmware_name() or "(no answer)", result.bootloader_text,
+                ("Firmware\t%s\nAnswers as\t%s\nBootloader\t%s\nRecovery\t%s" % (
+                    app.firmware_name() or "(no answer)", result.after or result.before or "(no answer)",
+                    result.bootloader_text,
                     boot.RECOVERY[result.bootloader].replace("Recovery: ", "")), FG),
                 ("Flash chip\t%s, %06X%s\nSize\t%d KiB\nChip key\t%04X\nChip ID\t%s\nBoot ROM\t%s\nLoader\t%s, "
                  "%d MHz\nWritable\t%s" % (
@@ -902,16 +910,19 @@ def show_device(app, _item=None) -> None:
     except Exception as e:
         state, detail = "error", str(e)
     st = app.store.state
-    now = {"firmware": "plugged in, says it is %s" % detail, "rom": "plugged in, in download mode",
+    now = {"firmware": "plugged in", "rom": "plugged in, in download mode",
            "none": "not found on USB", "error": "USB couldn't be looked at: %s" % detail}[state]
     pairs = "Now\t%s" % now
     if app.firmware_name():
         pairs += "\nFirmware\t%s" % app.firmware_name()
+    if state == "firmware" or st["identity"]:
+        pairs += "\nAnswers as\t%s" % (detail if state == "firmware" else st["identity"])
     if st["bootloader"]:
         pairs += "\nBootloader\t%s\nRecovery\t%s" % (st["bootloader_text"],
                                                       boot.RECOVERY[st["bootloader"]].replace("Recovery: ", ""))
     if st.get("flash"):
-        pairs += "\nFlash chip\t%s%s" % (st["flash"], " (newer)" if st["flash"] == "B36014" else "")
+        pairs += "\nFlash chip\t%s, %s%s" % (FLASH_NAMES.get(st["flash"], "unknown"), st["flash"],
+                                             " (newer)" if st["flash"] == "B36014" else "")
     parts = [(pairs, FG),
              ("Enter asks its chip what it is. That restarts the FM-1 (unsaved work on it is lost) and writes "
               "nothing.", DIM)]
@@ -953,7 +964,7 @@ def home_items(app) -> list[Item]:
 
 
 class Home(ListScreen):
-    hint = ";/. move  Enter open"
+    hint = "F/X move  Enter open"
 
     def __init__(self):
         super().__init__("FM-1 Zero")
@@ -965,7 +976,7 @@ class Home(ListScreen):
         return "v" + __version__
 
     def key(self, app, key: str) -> None:
-        if key not in ("esc", "`"):
+        if key != "esc":
             super().key(app, key)
 
 
@@ -1005,7 +1016,7 @@ class App:
         st = self.store.state
         chosen = st.get("installed") or {}
         if chosen.get("name") and chosen.get("identity") == st["identity"]:
-            return "%s (%s)" % (chosen["name"], st["identity"]) if st["identity"] else chosen["name"]
+            return chosen["name"]
         return st["identity"]
 
     def saw(self, result, installed: str = "") -> None:
