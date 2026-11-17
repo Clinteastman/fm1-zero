@@ -54,8 +54,8 @@ class Canvas:
     def __init__(self):
         self.img = Image.new("RGB", (W, H), BG)
         self.d = ImageDraw.Draw(self.img)
-        self.font = _font(12)
-        self.small = _font(10)
+        self.font = _font(13)
+        self.small = _font(11)
 
     def clear(self) -> None:
         self.d.rectangle([0, 0, W, H], fill=BG)
@@ -152,14 +152,14 @@ class Canvas:
         y, shown = TOP + 3, 0
         for label, line, colour, gap in lines[top_line:]:
             y += gap if shown else 0
-            if y + 14 > max_y:
+            if y + 15 > max_y:
                 break
             if label is None:
                 self.d.text((8, y), line, font=self.font, fill=colour)
             else:
                 self.d.text((8, y), label, font=self.font, fill=DIM)
                 self.d.text((LABEL_W, y), line, font=self.font, fill=colour)
-            y += 14
+            y += 15
             shown += 1
         return shown, len(lines)
 
@@ -337,8 +337,8 @@ class Work(Screen):
     live = True
 
     def __init__(self, title: str, job: Callable[["Work"], object], with_map: bool = False,
-                 again: Callable | None = None):
-        self.title, self.with_map, self.again = title, with_map, again
+                 again: Callable | None = None, then: Callable | None = None):
+        self.title, self.with_map, self.again, self.then = title, with_map, again, then
         self.status = "Starting"
         self.progress = jobs.Progress()
         self.result = None
@@ -367,7 +367,7 @@ class Work(Screen):
         p = self.progress
         width = W - 16 - (106 if self.with_map else 0)
         for i, line in enumerate(c.wrap(self.status, width)[:2]):
-            c.d.text((8, TOP + 4 + i * 14), line, font=c.font, fill=FG)
+            c.d.text((8, TOP + 4 + i * 15), line, font=c.font, fill=FG)
         if p.total:
             c.d.rectangle([8, 58, 8 + width, 66], fill=BAR)
             c.d.rectangle([8, 58, 8 + width * p.done // p.total, 66], fill=ACCENT)
@@ -378,7 +378,7 @@ class Work(Screen):
         if self.with_map:
             # the one thing that matters while it writes, where it can't be missed
             for i, line in enumerate(c.wrap("Keep the FM-1 on and the cable in.", width)):
-                c.d.text((8, 92 + i * 14), line, font=c.font, fill=ACCENT)
+                c.d.text((8, 92 + i * 15), line, font=c.font, fill=ACCENT)
             failed = sum(1 for state in p.states if state == 5)
             if failed:
                 c.d.text((8, 124), "%d sector%s retrying" % (failed, "" if failed == 1 else "s"),
@@ -400,7 +400,10 @@ class Work(Screen):
             self.thread.start()
         elif self.result is not None:
             app.pop()
-            app.push(self.outcome(app))
+            if self.then and self.error is None:
+                app.push(self.then(app))  # nothing to say: on to what was asked for
+            else:
+                app.push(self.outcome(app))
 
     def outcome(self, app) -> TextScreen:
         """The screen that says how it went, and what to do now."""
@@ -519,7 +522,7 @@ class Picture(Screen):
             c.img.paste(self.image, ((W - self.image.width) // 2, (H - 28 - self.image.height) // 2))
         else:
             for i, line in enumerate(c.wrap(self.error or "Getting the picture...", W - 20)[:6]):
-                c.d.text((10, 50 + i * 14), line, font=c.font, fill=BAD if self.error else DIM)
+                c.d.text((10, 50 + i * 15), line, font=c.font, fill=BAD if self.error else DIM)
         c.d.rectangle([0, H - 28, W, H - 14], fill=BG)
         c.credit(e, H - 27)
         c.hints("Esc/any_key back")
@@ -621,6 +624,10 @@ class Grid(Browse):
     hint = "F/X/Z/C move  Enter open  G list  Esc back"
     hint2 = ""
 
+    def items(self, app) -> list[Item]:
+        # the Hub has pictures for about half of its firmwares: those come first, in the list's own order
+        return sorted(super().items(app), key=lambda item: not item.data.get("card"))
+
     def draw(self, app, c: Canvas) -> None:
         items = self.items(app)
         self.sel = max(0, min(self.sel, len(items) - 1))
@@ -642,8 +649,11 @@ class Grid(Browse):
             if img is not None:
                 c.img.paste(img, (x + (TILE_W - img.width) // 2, y + (TILE_H - img.height) // 2))
             else:  # no picture (yet): its name, big, in the tile
-                for i, line in enumerate(c.wrap(e["name"], TILE_W - 8)[:3]):
-                    c.d.text((x + 4, y + 4 + i * 14), c.fit(line, TILE_W - 8), font=c.font, fill=DIM)
+                lines = c.wrap(e["name"], TILE_W - 8)[:2]
+                top = y + (TILE_H - 16 * len(lines)) // 2
+                for i, line in enumerate(lines):
+                    line = c.fit(line, TILE_W - 8)
+                    c.d.text((x + (TILE_W - c.font.getlength(line)) // 2, top + i * 16), line, font=c.font, fill=DIM)
             if chosen:
                 c.d.rectangle([x - 2, y - 2, x + TILE_W + 1, y + TILE_H + 1], outline=ACCENT, width=2)
             label = c.fit(item.label, TILE_W, c.small)
@@ -931,6 +941,23 @@ def show_device(app, _item=None) -> None:
     app.push(TextScreen("FM-1 device", parts, go, hint="Enter ask the chip  Esc back"))
 
 
+def discover(app, _item=None) -> None:
+    """Open the list. If it has never been read, or the last try was a day ago, read it first (the
+    once-a-day rule in catalogue.refresh is what keeps the Hub from being asked too often)."""
+    cache = catalogue.read_cache(app.store.catalogue_path)
+    if cache and time.time() - cache.get("triedAt", 0) < catalogue.DAY:
+        app.push(Browse(False))
+        return
+
+    def job(work: Work) -> str:
+        work.say("Reading The Firmware Hub's list")
+        new, message = catalogue.refresh(app.store.catalogue_path)
+        app.entries = (new or {}).get("entries", [])
+        return message
+
+    app.push(Work("Discover", job, then=lambda app: Browse(False)))
+
+
 def do_refresh(app, _item=None) -> None:
     def job(work: Work) -> str:
         work.say("Reading The Firmware Hub's list")
@@ -950,7 +977,7 @@ def show_storage(app, _item=None) -> None:
 
 def home_items(app) -> list[Item]:
     return [
-        Item("Discover", "%d firmwares" % len(app.entries), lambda app, _i: app.push(Browse(False))),
+        Item("Discover", "%d firmwares" % len(app.entries), discover),
         Item("Downloaded", "%d" % len(app.store.packages()), lambda app, _i: app.push(Browse(True))),
         Item("FM-1 device", app.firmware_name(), show_device),
         Item("Create backup", "", start_backup),

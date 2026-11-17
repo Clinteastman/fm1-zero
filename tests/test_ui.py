@@ -20,7 +20,7 @@ class Clock:
 def make_app(d, keys=()):
     s = store.Store(Path(d))
     entries = catalogue.normalise(FEED)
-    s.catalogue_path.write_text(json.dumps({"schema": 1, "entries": entries, "triedAt": 0}))
+    s.catalogue_path.write_text(json.dumps({"schema": 1, "entries": entries, "triedAt": time.time()}))
     # a unit already checked, with m-bootloader: installs go straight to the install question
     s.state.update(bootloader=boot.OPEN, bootloader_text="m-bootloader 2.4 (fm1)", flash="856014")
     clock = Clock()
@@ -362,6 +362,58 @@ class UiTests(unittest.TestCase):
         self.assertIsInstance(app.stack[-1], ui.Home)
         for screen_hint in (ui.Home.hint, ui.Browse.hint, ui.Browse.hint2, ui.Grid.hint):
             self.assertFalse(set(";./`") & set(screen_hint.replace("F/X/Z/C", "").replace("F/X", "")), screen_hint)
+    def test_discover_reads_the_list_itself_when_it_is_old(self):
+        app, _ = make_app(self.dir.name)
+        asked = []
+
+        def fake(path, *a, **k):
+            asked.append(path)
+            return {"entries": app.entries}, "Read %d firmwares from The Firmware Hub." % len(app.entries)
+
+        keep = catalogue.refresh
+        catalogue.refresh = fake
+        self.addCleanup(lambda: setattr(catalogue, "refresh", keep))
+        ui.discover(app)  # fresh (just written): no read
+        self.assertEqual(asked, [])
+        self.assertIsInstance(app.stack[-1], ui.Browse)
+        app.home()
+        app.store.catalogue_path.write_text(json.dumps({"schema": 2, "entries": app.entries, "triedAt": 1}))
+        ui.discover(app)
+        finish(app)
+        self.assertEqual(len(asked), 1)
+        self.assertIsInstance(app.stack[-1], ui.Browse)  # straight on to the list, no "Done" screen in between
+
+    def test_discover_with_no_list_reads_it(self):
+        app, _ = make_app(self.dir.name)
+        app.store.catalogue_path.unlink()
+        keep = catalogue.refresh
+        catalogue.refresh = lambda path, *a, **k: (None, "Couldn't read the list (offline). Kept the old one.")
+        self.addCleanup(lambda: setattr(catalogue, "refresh", keep))
+        app.entries = []
+        ui.discover(app)
+        finish(app)
+        self.assertIsInstance(app.stack[-1], ui.Browse)
+        self.assertEqual(app.entries, [])  # nothing to show, and the empty list says what to do
+
+    def test_grid_puts_firmwares_with_pictures_first(self):
+        app, _ = make_app(self.dir.name)
+        app.entries[0]["card"] = ""
+        app.entries[-1]["card"] = "fw/cards/x.w640.webp"
+        grid = ui.Grid(False)
+        shown = [i.data["id"] for i in grid.items(app)]
+        self.assertEqual(shown[0], app.entries[-1]["id"])
+        self.assertEqual(len(shown), len(app.entries))
+
+    def test_every_footer_fits_the_screen_in_the_bigger_type(self):
+        c = ui.Canvas()
+        for text in (ui.Home.hint, ui.Browse.hint, ui.Browse.hint2, ui.Grid.hint, ui.Backups.hint,
+                     "F/X move  Enter open  Esc back", "S find  L fav  Tab Discover",
+                     "R run it again  Esc leave it half written"):
+            width = 6
+            for part in text.split("  "):
+                key, _, what = part.strip().partition(" ")
+                width += c.small.getlength(key.replace("_", " ") + " " + what) + 9
+            self.assertLess(width - 9, ui.W - 4, text)
 
 if __name__ == "__main__":
     unittest.main()

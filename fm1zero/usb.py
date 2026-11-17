@@ -127,6 +127,10 @@ def open_rom(wait_s: float = 10.0) -> Storage:
             try:
                 return Storage(dev)
             except Exception as e:  # permissions, or the kernel still has it
+                if getattr(e, "errno", None) == 13:  # no point waiting: only a rule or root fixes this
+                    raise rom.RomError(
+                        "This user is not allowed to open the FM-1's boot loader. Run 'sudo sh "
+                        "packaging/postinst', replug it, and try again (or run this once with sudo).")
                 last = "Its boot loader came, but it couldn't be opened (%s)." % e
         if time.monotonic() > end:
             raise rom.RomError(last)
