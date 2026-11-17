@@ -8,7 +8,10 @@ It is [lilfm1buddy](https://github.com/konsumer/lilfm1buddy) and [fm1-flip](http
 for a different device. Those run on ESP32 boards. The CardputerZero is a small Linux computer (Raspberry Pi CM0), so
 this is a Python app instead of firmware.
 
-![The app's screens at 320x170, with stand-in art for the firmware pictures](shots/sheet.png)
+![The app's screens at 320x170](shots/sheet.png)
+
+The firmware pictures in the screenshots are the makers' own, as listed by The Firmware Hub (CC BY 4.0); each one is
+credited on screen with its maker's name and repository.
 
 **Status: not yet run on real hardware.** The logic passes 77 tests against a pretend FM-1, the package reader matches
 two real maker releases, and the catalogue code has read the real Hub list. The USB side has never touched an FM-1.
