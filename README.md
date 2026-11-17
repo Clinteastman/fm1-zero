@@ -10,23 +10,28 @@ this is a Python app instead of firmware.
 
 ![The app's screens at 320x170](shots/sheet.png)
 
-The firmware pictures in the screenshots are the makers' own, as listed by The Firmware Hub (CC BY 4.0); each one is
-credited on screen with its maker's name and repository.
+The firmware pictures in the screenshots are the makers' own work, taken from The Firmware Hub's list. Each one is
+credited on screen with its maker's name and repository. See the note on pictures under
+[Using the app](#using-the-app).
 
-**Status: not yet run on real hardware.** The logic passes 77 tests against a pretend FM-1, the package reader matches
-two real maker releases, and the catalogue code has read the real Hub list. The USB side has never touched an FM-1.
-Follow [First run](#first-run-prove-it-in-this-order) before trusting it.
+**Status: run on one real FM-1** (an older-flash-chip unit with m-bootloader). On it, `status`, `info` and `backup`
+work, and a backup is byte-for-byte the same as M-Flasher's of the same unit. Restoring an identical image writes
+nothing, and a real install of SLOOP worked. The logic also passes 85 tests against a pretend FM-1.
+
+Not proven yet: SMK-37 keyboards, the newer flash chip (`0xB36014`), the recovery paths (REC at power-on, the
+MIDI-mode recovery menu) and an install that stops part way. Follow
+[First run](#first-run-prove-it-in-this-order) on your own unit before trusting it.
 
 ## What it can and can't do
 
 | | |
 |---|---|
-| Browse, search, sort and favourite the Hub's firmwares | yes |
+| Browse, search, sort and favourite the Hub's firmwares, as a list or a grid of pictures | yes |
 | Download a package from its maker's GitHub release, checked by size and SHA-256 | yes |
 | Use `.fwsc` files you copy on by hand | yes |
 | Show each firmware's own picture (`P` on its page), with its maker's name and repository | yes, needs internet the first time |
 | Back up the whole 1 MiB flash (read twice, compared) | yes |
-| Install a firmware, restore a backup | yes |
+| Download and install in one go, or install a package you already have; restore a backup | yes |
 | Show the flash's 256 sectors as it goes, on the CardputerZero and on the FM-1's own screen | yes |
 | SMK-37 keyboards (the FM-1's chip in a keyboard) | the rules are there, untested |
 | Say which bootloader the FM-1 has, and how it would be recovered | yes |
@@ -102,16 +107,22 @@ sh setup-on-zero.sh
 That installs Python's Pillow, numpy, evdev and pyusb, and a udev rule so you can reach the FM-1's boot loader
 without root. Log out and in again afterwards.
 
-To make it an app in the CardputerZero's launcher, build a `.deb` with M5Stack's
-[AppBuilder](https://github.com/CardputerZero/CardputerZero-AppBuilder): `scripts/pack-deb.sh /path/to/fm1-zero`.
-The `packaging/` folder is laid out as its Python example's is. This has not been built or installed yet.
+To make it an app in the CardputerZero's launcher, build a `.deb` on the CardputerZero itself:
+
+```sh
+sh packaging/build-deb.sh
+sudo apt install ./fm1-zero_*_all.deb
+```
+
+It needs only `dpkg-deb`. It installs the app as "FM-1 Zero" in the launcher, with the udev rule, so no log out is
+needed. The version comes from `packaging/meta.env`.
 
 ## First run: prove it in this order
 
 Do [Recovery](#recovery-set-this-up-before-the-first-install) first. Then do these over SSH, with the FM-1 plugged into the CardputerZero by a data cable and switched on. Each step risks
 more than the one before, so stop at the first one that goes wrong and send me what it printed.
 
-1. `python3 -m unittest discover -s tests -t .` : the 77 tests pass on the CardputerZero itself.
+1. `python3 -m unittest discover -s tests -t .` : the 85 tests pass on the CardputerZero itself.
 2. `python3 -m fm1zero status` : lists MIDI devices and what the FM-1 says it is. Writes nothing, restarts nothing.
 3. `python3 -m fm1zero info` : sends the FM-1 to its boot loader, loads the flash loader into its RAM, asks the chip
    what it is, and restarts it. Writes nothing to flash. This proves the whole USB path.
@@ -133,14 +144,14 @@ and a backup from a different FM-1 are each refused with nothing written.
 
 | Key | Does |
 |---|---|
-| `F` and `X` | up and down. These are the arrow keys (Fn + F, Fn + X); they work with or without Fn |
-| `Z` and `C` | left and right in the grid, a page up and down in a list |
+| `F` and `X` | up and down. These are the arrow keys (Fn + F, Fn + X); they work with or without Fn. On the home tiles, a row at a time |
+| `Z` and `C` | left and right in the grid and on the home tiles, a page up and down in a list |
 | Enter | open, choose |
 | Esc | back |
 | `S` | search (Discover and Downloaded) |
 | `G` | Discover as a grid of pictures, and back |
 | `L` | favourite the highlighted firmware |
-| `O` | sort: popular, name |
+| `O` | sort. Discover: popular, name, maker, ready (installable first). Downloaded: name, newest. Backups: newest, oldest, firmware |
 | `K` | show one kind (synth, drums, groove ...) |
 | `V` | favourites only |
 | `U` | this unit only: hides firmwares that don't suit your FM-1's flash chip |
@@ -161,7 +172,9 @@ Files live in `~/.local/share/fm1zero/`: `packages/`, `backups/`, `cards/` (pict
 `catalogue.json`, `state.json`.
 
 The pictures are each maker's own work, fetched from the Hub's copy. They are not part of the list's CC BY licence,
-so they are only shown with the maker's name and repository under them, and never passed on.
+so the app only shows them with the maker's name and repository under them, and never passes them on. The
+screenshots in `shots/` do include a few, credited the same way: check each maker is happy with that before this
+repository is made public.
 
 ## Not in it (yet)
 
