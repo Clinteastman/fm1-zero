@@ -56,6 +56,7 @@ class Canvas:
         self.d = ImageDraw.Draw(self.img)
         self.font = _font(13)
         self.small = _font(11)
+        self.big = _font(15)  # the names in the picture grid
 
     def clear(self) -> None:
         self.d.rectangle([0, 0, W, H], fill=BG)
@@ -452,7 +453,7 @@ class Search(Screen):
             self.text += key
 
 
-TILE_W, TILE_H, COLS, GRID_ROWS = 100, 46, 3, 2
+TILE_W, TILE_H, COLS, GRID_ROWS = 148, 98, 2, 1  # two big pictures side by side
 
 
 class Thumbs:
@@ -641,7 +642,7 @@ class Grid(Browse):
         gap = (W - COLS * TILE_W) // (COLS + 1)
         for n, item in enumerate(items[top:top + per]):
             x = gap + (n % COLS) * (TILE_W + gap)
-            y = TOP + 2 + (n // COLS) * (TILE_H + 13)
+            y = TOP + 2 + (n // COLS) * (TILE_H + 20)
             chosen = top + n == self.sel
             e = item.data
             c.d.rectangle([x, y, x + TILE_W - 1, y + TILE_H - 1], fill=BAR)
@@ -649,15 +650,15 @@ class Grid(Browse):
             if img is not None:
                 c.img.paste(img, (x + (TILE_W - img.width) // 2, y + (TILE_H - img.height) // 2))
             else:  # no picture (yet): its name, big, in the tile
-                lines = c.wrap(e["name"], TILE_W - 8)[:2]
-                top = y + (TILE_H - 16 * len(lines)) // 2
+                lines = c.wrap(e["name"], TILE_W - 8, c.big)[:3]
+                top = y + (TILE_H - 19 * len(lines)) // 2
                 for i, line in enumerate(lines):
-                    line = c.fit(line, TILE_W - 8)
-                    c.d.text((x + (TILE_W - c.font.getlength(line)) // 2, top + i * 16), line, font=c.font, fill=DIM)
+                    line = c.fit(line, TILE_W - 8, c.big)
+                    c.d.text((x + (TILE_W - c.big.getlength(line)) // 2, top + i * 19), line, font=c.big, fill=DIM)
             if chosen:
                 c.d.rectangle([x - 2, y - 2, x + TILE_W + 1, y + TILE_H + 1], outline=ACCENT, width=2)
-            label = c.fit(item.label, TILE_W, c.small)
-            c.d.text((x, y + TILE_H + 1), label, font=c.small, fill=ACCENT if chosen else item.colour)
+            label = c.fit(item.label, TILE_W, c.big)
+            c.d.text((x, y + TILE_H + 1), label, font=c.big, fill=ACCENT if chosen else item.colour)
         c.credit(items[self.sel].data, H - 27)  # whose picture the chosen one is
 
     def key(self, app, key: str) -> None:
