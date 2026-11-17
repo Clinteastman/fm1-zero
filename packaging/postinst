@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+# the FM-1's boot loader (4c4a:8057), for whoever is at the keyboard: no root needed
+cat >/etc/udev/rules.d/70-fm1-zero.rules <<'RULE'
+SUBSYSTEM=="usb", ATTR{idVendor}=="4c4a", ATTR{idProduct}=="8057", MODE="0660", GROUP="plugdev"
+RULE
+udevadm control --reload-rules 2>/dev/null || true
+# the screen, the keyboard, USB and MIDI
+for grp in video input plugdev audio; do
+    if getent group "$grp" >/dev/null && id -u pi >/dev/null 2>&1; then
+        usermod -aG "$grp" pi || true
+    fi
+done
+exit 0
