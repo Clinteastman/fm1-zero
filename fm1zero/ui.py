@@ -18,6 +18,7 @@ from typing import Callable
 from PIL import Image, ImageDraw, ImageFont
 
 from . import __version__, boot, catalogue, device, jobs, pkg as pkgmod
+from . import icons
 from .hw import H, W
 from .rom import FM1_FLASHES
 from .store import Saved, Store
@@ -26,6 +27,7 @@ BG, FG, DIM, ACCENT, BAR, BAD, GOOD = "#101014", "#e8e8e8", "#b4b4be", "#ffb000"
 MAP_COLOURS = ["#26262e", "#ffb000", "#5ad26a", "#4a9a8c", "#3fb6d6", "#ff5a4a"]
 LABEL_W = 86  # where a "label<tab>value" line's value starts
 HOLD_S = 2.0
+TRAIL = ("Download", "Check", "Install")
 FLASH_NAMES = {"%06X" % ident: name for ident, name in FM1_FLASHES.items()}
 # Moving. The CardputerZero has no arrow keys of its own: they are Fn + F, X, Z and C. The same four
 # keys move here without Fn too, so nothing needs a layer. (; and . are kept for a USB keyboard.)
@@ -91,13 +93,23 @@ class Canvas:
             out.append(line)
         return out
 
-    def frame(self, title: str, hint: str, right: str = "", colour: str = ACCENT, hint2: str = "") -> None:
+    def frame(self, title: str, hint: str, right: str = "", colour: str = ACCENT, hint2: str = "",
+              step: int | None = None, icon: str = "") -> None:
         self.clear()
         self.d.rectangle([0, 0, W, 17], fill=BAR)
         if colour != ACCENT:  # a result: its colour runs under the header too
             self.d.rectangle([0, 17, W, 18], fill=colour)
-        self.d.text((6, 2), self.fit(title, W - 100), font=self.font, fill=colour)
-        if right:
+        icons.paste(self.img, icon or icons.icon_for(title), 4, 2, 14, colour)
+        self.d.text((23, 2), self.fit(title, W - 23 - (150 if step is not None else 100)), font=self.font, fill=colour)
+        if step is not None:  # where this is in download, check, install
+            x = W - 6
+            for n in range(len(TRAIL) - 1, -1, -1):
+                x -= self.small.getlength(TRAIL[n])
+                self.d.text((x, 4), TRAIL[n], font=self.small, fill=FG if n == step else DIM)
+                if n == step:
+                    self.d.rectangle([x, 16, x + self.small.getlength(TRAIL[n]), 17], fill=ACCENT)
+                x -= 9
+        elif right:
             self.d.text((W - 6 - self.small.getlength(right), 4), right, font=self.small, fill=DIM)
         if hint2:
             self.hints(hint, H - 28)
@@ -177,6 +189,7 @@ class Item:
 
 class Screen:
     live = False  # redrawn all the time (progress, a held key)
+    icon = ""  # the header's icon; empty: chosen from the title
 
     def draw(self, app, c: Canvas) -> None:
         pass
@@ -196,8 +209,8 @@ class ListScreen(Screen):
     hint = "F/X move  Enter open  Esc back"
     hint2 = ""  # a second row of keys, above the first, for the screens with many
 
-    def __init__(self, title: str, items: list[Item] | None = None, empty: str = "Nothing here."):
-        self.title, self._items, self.empty = title, items or [], empty
+    def __init__(self, title: str, items: list[Item] | None = None, empty: str = "Nothing here.", icon: str = ""):
+        self.title, self._items, self.empty, self.icon = title, items or [], empty, icon
         self.sel = 0
 
     def items(self, app) -> list[Item]:
@@ -210,7 +223,8 @@ class ListScreen(Screen):
         items = self.items(app)
         self.sel = max(0, min(self.sel, len(items) - 1))
         rows = ROWS - 1 if self.hint2 else ROWS
-        c.frame(self.title, self.hint2 or self.hint, self.right(app), hint2=self.hint if self.hint2 else "")
+        c.frame(self.title, self.hint2 or self.hint, self.right(app), hint2=self.hint if self.hint2 else "",
+                icon=self.icon)
         if not items:
             for i, line in enumerate(c.wrap(self.empty, W - 20)):
                 c.d.text((10, TOP + 8 + i * ROW_H), line, font=c.font, fill=DIM)
@@ -253,7 +267,8 @@ class TextScreen(Screen):
     """Text to read: one string, or blocks of (text, colour). keys adds a screen's own keys: {"p": do}."""
 
     def __init__(self, title: str, text, on_enter: Callable | None = None, hint: str = "", colour: str = FG,
-                 title_colour: str = ACCENT, keys: dict | None = None, enter_leaves: bool = True):
+                 title_colour: str = ACCENT, keys: dict | None = None, enter_leaves: bool = True, icon: str = ""):
+        self.icon = icon
         self.title, self.parts, self.on_enter = title, as_sections(text, colour), on_enter
         self.title_colour, self.keys, self.enter_leaves = title_colour, keys or {}, enter_leaves
         self.hint = hint or ("Enter options  Esc back" if on_enter else "Esc back")
@@ -265,7 +280,7 @@ class TextScreen(Screen):
         return " ".join(text for text, _colour in self.parts)
 
     def draw(self, app, c: Canvas) -> None:
-        c.frame(self.title, ("F/X scroll  " if self.more else "") + self.hint, colour=self.title_colour)
+        c.frame(self.title, ("F/X scroll  " if self.more else "") + self.hint, colour=self.title_colour, icon=self.icon)
         shown, total = c.sections(self.parts, self.top)
         self.more = total > shown or self.top > 0
         self.top = max(0, min(self.top, total - 1))
@@ -293,20 +308,21 @@ class Confirm(Screen):
     live = True
 
     def __init__(self, title: str, text, action: Callable, verb: str = "go ahead", keys: dict | None = None,
-                 hint: str = ""):
+                 hint: str = "", step: int | None = None):
         self.title, self.parts, self.action = title, as_sections(text), action
-        self.verb, self.keys, self.extra = verb, keys or {}, hint
+        self.verb, self.keys, self.extra, self.step = verb, keys or {}, hint, step
         self.since = None
 
     def draw(self, app, c: Canvas) -> None:
-        c.frame(self.title, "Hold_Enter %s (2 s)  %sEsc cancel" % (self.verb, self.extra + "  " if self.extra else ""))
-        c.sections(self.parts, max_y=H - 36)
+        c.frame(self.title, "Hold_Enter %s (2 s)  %sEsc cancel" % (self.verb, self.extra + "  " if self.extra else ""),
+                step=self.step)
+        c.sections(self.parts, max_y=H - 54)
         held = 0.0 if self.since is None else min(1.0, (app.now() - self.since) / HOLD_S)
-        c.d.text((8, H - 37), "Keep holding..." if held else "Hold Enter to %s" % self.verb, font=c.small,
-                 fill=ACCENT if held else DIM)
-        c.d.rectangle([8, H - 23, W - 8, H - 18], fill=BAR)
+        c.d.text((8, H - 52), "Keep holding..." if held else "Hold Enter to %s" % self.verb, font=c.big,
+                 fill=ACCENT if held else FG)
+        c.d.rectangle([8, H - 30, W - 8, H - 20], fill=BAR)
         if held:
-            c.d.rectangle([8, H - 23, 8 + int((W - 16) * held), H - 18], fill=ACCENT)
+            c.d.rectangle([8, H - 30, 8 + int((W - 16) * held), H - 20], fill=ACCENT)
 
     def key(self, app, key: str) -> None:
         if key == "enter":
@@ -338,8 +354,8 @@ class Work(Screen):
     live = True
 
     def __init__(self, title: str, job: Callable[["Work"], object], with_map: bool = False,
-                 again: Callable | None = None, then: Callable | None = None):
-        self.title, self.with_map, self.again, self.then = title, with_map, again, then
+                 again: Callable | None = None, then: Callable | None = None, step: int | None = None):
+        self.title, self.with_map, self.again, self.then, self.step = title, with_map, again, then, step
         self.status = "Starting"
         self.progress = jobs.Progress()
         self.result = None
@@ -364,7 +380,7 @@ class Work(Screen):
         self.status = "%d of %d KiB" % (done // 1024, total // 1024)
 
     def draw(self, app, c: Canvas) -> None:
-        c.frame(self.title, "Keys are off until this is done")
+        c.frame(self.title, "Keys are off until this is done", step=self.step)
         p = self.progress
         width = W - 16 - (106 if self.with_map else 0)
         for i, line in enumerate(c.wrap(self.status, width)[:2]):
@@ -402,7 +418,9 @@ class Work(Screen):
         elif self.result is not None:
             app.pop()
             if self.then and self.error is None:
-                app.push(self.then(app))  # nothing to say: on to what was asked for
+                screen = self.then(app)  # nothing to say: on to what was asked for
+                if screen is not None:
+                    app.push(screen)
             else:
                 app.push(self.outcome(app))
 
@@ -495,6 +513,7 @@ class Picture(Screen):
     """A firmware's own picture, from the list. Always with its maker's name and repository under it."""
 
     live = True
+    icon = "picture"
 
     def __init__(self, entry: dict, fetch=catalogue.card):
         self.entry, self.fetch = entry, fetch
@@ -519,6 +538,7 @@ class Picture(Screen):
     def draw(self, app, c: Canvas) -> None:
         e = self.entry
         c.clear()
+        icons.paste(c.img, "picture", 4, 2, 14, ACCENT)
         if self.image is not None:
             c.img.paste(self.image, ((W - self.image.width) // 2, (H - 28 - self.image.height) // 2))
         else:
@@ -533,6 +553,10 @@ class Picture(Screen):
 
 
 # ---------------------------------------------------------------------------------- the app's screens ---
+SAVED_SORTS = ("name", "newest")
+BACKUP_SORTS = ("newest", "oldest", "firmware")
+
+
 class Browse(ListScreen):
     """The Hub's list (Discover), or only what is downloaded."""
 
@@ -556,10 +580,13 @@ class Browse(ListScreen):
         out = []
         if self.downloaded:
             self.title = "Downloaded"
-            self.hint, self.hint2 = "F/X move  Enter open  Esc back", "S find  L fav  Tab Discover"
+            self.hint, self.hint2 = "F/X move  Enter open  Esc back", "S find  L fav  O sort  Tab Discover"
             self.empty = "No packages yet. Download one from Discover, or copy .fwsc files into packages/."
             words = f["search"].lower().split()
-            for saved in app.store.packages():
+            packages = app.store.packages()
+            if f["saved_sort"] == "newest":
+                packages.sort(key=lambda s: -s.path.stat().st_mtime)
+            for saved in packages:
                 label = saved.meta.get("name") or saved.name
                 if all(w in (label + " " + saved.name).lower() for w in words):
                     out.append(Item(("* " if saved.meta.get("id") in app.store.favourites else "") + label,
@@ -581,7 +608,7 @@ class Browse(ListScreen):
 
     def right(self, app) -> str:
         f = app.filters
-        parts = ([] if self.downloaded else [f["sort"]]) + [x for x in (f["kind"], "favs" if f["favs"] else "", "this unit" if f["unit"] and not self.downloaded else "",
+        parts = [f["saved_sort"] if self.downloaded else f["sort"]] + [x for x in (f["kind"], "favs" if f["favs"] else "", "this unit" if f["unit"] and not self.downloaded else "",
                                                                          f["search"] and '"%s"' % f["search"])
                                if x]
         return " ".join(parts)
@@ -596,8 +623,12 @@ class Browse(ListScreen):
             app.push(Browse(not self.downloaded))
         elif key in ("g", "G") and not self.downloaded:
             self.swap(app, Grid(False))
-        elif key in ("o", "O") and not self.downloaded:
-            f["sort"] = catalogue.SORTS[(catalogue.SORTS.index(f["sort"]) + 1) % len(catalogue.SORTS)]
+        elif key in ("o", "O"):
+            if self.downloaded:
+                f["saved_sort"] = SAVED_SORTS[(SAVED_SORTS.index(f["saved_sort"]) + 1) % len(SAVED_SORTS)]
+            else:
+                f["sort"] = catalogue.SORTS[(catalogue.SORTS.index(f["sort"]) + 1) % len(catalogue.SORTS)]
+            self.sel = 0  # the order changed: start from the top
         elif key in ("k", "K") and not self.downloaded:
             kinds = [""] + catalogue.kinds(app.entries)
             f["kind"] = kinds[(kinds.index(f["kind"]) + 1) % len(kinds)] if f["kind"] in kinds else ""
@@ -622,7 +653,7 @@ class Grid(Browse):
     """Discover as pictures: three across, two down. The same list, filters and keys as the list view."""
 
     live = True
-    hint = "F/X/Z/C move  Enter open  G list  Esc back"
+    hint = "F/X/Z/C move  Enter open  G list  O sort  Esc back"
     hint2 = ""
 
     def items(self, app) -> list[Item]:
@@ -632,7 +663,7 @@ class Grid(Browse):
     def draw(self, app, c: Canvas) -> None:
         items = self.items(app)
         self.sel = max(0, min(self.sel, len(items) - 1))
-        c.frame(self.title, self.hint, self.right(app))
+        c.frame(self.title, self.hint, self.right(app), icon="discover")
         if not items:
             for i, line in enumerate(c.wrap(self.empty, W - 20)):
                 c.d.text((10, TOP + 8 + i * ROW_H), line, font=c.font, fill=DIM)
@@ -724,7 +755,8 @@ def entry_options(app, e: dict) -> None:
     if saved:
         items.append(Item("Install on FM-1", "", lambda app, _i: ask_install(app, saved)))
     elif e["downloadable"]:
-        items.append(Item("Download package", _size(e["size"]), lambda app, _i: start_download(app, e)))
+        items.append(Item("Download and install", _size(e["size"]), lambda app, _i: start_download(app, e, True)))
+        items.append(Item("Download only", "", lambda app, _i: start_download(app, e)))
     if e.get("card"):
         items.append(Item("Show picture", "", lambda app, _i: app.push(Picture(e))))
     fav = e["id"] in app.store.favourites
@@ -767,18 +799,24 @@ def ask_delete(app, saved: Saved) -> None:
                      verb="delete"))
 
 
-def start_download(app, e: dict) -> None:
+def start_download(app, e: dict, install: bool = False) -> None:
+    """Download a firmware. With install, go on to the install question (the same one, with its own
+    checks and its hold-to-confirm) as soon as the package is here and checked."""
+    got: list = []
+
     def job(work: Work) -> str:
         work.say("Asking the maker's GitHub release")
         raw = catalogue.download(e, progress=work.bytes_done)
         work.say("Checking the package")
         saved = app.store.add_package(e, raw)
+        got.append(saved)
         return [("%s %s is downloaded." % (e["name"], e["version"]), GOOD),
                 ("Checked against the list's SHA-256. It is for %s." % saved.meta["product"], FG),
                 ("Open it again to install it.", DIM)]
 
     app.pop()
-    app.push(Work("Downloading " + e["name"], job))
+    app.push(Work("Downloading " + e["name"], job, step=0 if install else None,
+                  then=(lambda app: ask_install(app, got[0])) if install else None))
 
 
 def said(result) -> list:
@@ -788,26 +826,32 @@ def said(result) -> list:
     return [("The FM-1 didn't answer after restarting: look at its own screen.", ACCENT)]
 
 
+def check_then(app, then: Callable) -> None:
+    """Ask the FM-1 what it is (restarts it, writes nothing), remember it, then carry straight on."""
+    def job(work: Work) -> str:
+        result = device.identify(work.say)
+        app.saw(result)
+        return "FM-1 checked."
+
+    app.push(Work("Checking your FM-1", job, then=then, step=1))
+
+
 def ask_install(app, saved: Saved) -> None:
-    """Install a package. An FM-1 without m-bootloader has no easy way back from a failed install, so
-    that is put to the user first, on a screen of its own, before the install question (after
-    M-Flasher +'s rule: m-bootloader before a firmware)."""
+    """Install a package. The first time, the FM-1 is checked on the way (how it recovers is kept, so
+    it is not asked again). An FM-1 without m-bootloader has no easy way back from a failed install, so
+    that is put to the user first (after M-Flasher +'s rule: m-bootloader before a firmware)."""
     kind = app.store.state["bootloader"]
-    if kind == boot.OPEN:
+    if not kind:
+        check_then(app, lambda app: ask_install(app, saved))
+    elif kind == boot.OPEN:
         install_question(app, saved)
-    elif kind in (boot.STOCK, boot.DAMAGED):
-        app.push(Confirm("No easy way back", [
-            ("This FM-1 has the stock bootloader." if kind == boot.STOCK else "This FM-1's boot area is damaged.", BAD),
-            ("If an install fails and its firmware won't start, only a USB_KEY dongle recovers it.", FG),
-            ("Safer: put m-bootloader on it first with M-Flasher. Then holding REC always gets it back.", DIM),
-        ], lambda app: install_question(app, saved), verb="go on anyway"))
     else:
-        app.push(TextScreen("Check the FM-1 first", [
-            ("How this FM-1 recovers from a failed install isn't known yet.", ACCENT),
-            ("Press Enter to check it now. That restarts the FM-1 and writes nothing. Then come back and install.",
+        app.push(Confirm("No easy way back", [
+            ("This FM-1's boot area is damaged." if kind == boot.DAMAGED else
+             "Stock bootloader." if kind == boot.STOCK else "Can't tell how this FM-1 recovers.", BAD),
+            ("If an install fails, only a USB_KEY dongle brings it back. Safer: put m-bootloader on first (README).",
              FG),
-        ], lambda app: (app.pop(), show_device(app)), hint="Enter check it  I install anyway  Esc back",
-            keys={"i": lambda app: (app.pop(), install_question(app, saved))}))
+        ], lambda app: install_question(app, saved), verb="go on anyway", step=2))
 
 
 def install_question(app, saved: Saved) -> None:
@@ -827,17 +871,14 @@ def install_question(app, saved: Saved) -> None:
                 ("%d sectors written and read back." % result.written, FG)] + said(result)
 
     def start(app):
-        app.push(Work("Installing", job, with_map=True, again=start))
+        app.push(Work("Installing", job, with_map=True, again=start, step=2))
 
     kind = app.store.state["bootloader"]
-    risk = {boot.OPEN: [("Recovery: easy (m-bootloader)", GOOD),
-                        ("If it fails: hold REC while switching the FM-1 on, then install again.", FG)],
-            }.get(kind, [("Risk: no easy recovery", BAD), ("Only a USB_KEY dongle recovers a failed install.", FG)])
+    risk = ("Easy to undo: hold REC at power-on", GOOD) if kind == boot.OPEN else ("No easy way back", BAD)
     now = app.firmware_name()
-    parts = [("Install %s on the FM-1?" % name, FG),
-             ("%sSongs and settings of another firmware are lost. No backup is made."
-              % ("Replaces %s. " % now if now else ""), FG)] + risk
-    app.push(Confirm("Install?", parts, start, verb="install", hint="B backup first",
+    parts = [("Install %s?" % name, FG),
+             ("%sOther songs and settings are lost." % ("Replaces %s. " % now if now else ""), DIM), risk]
+    app.push(Confirm("Install?", parts, start, verb="install", hint="B backup first", step=2,
                      keys={"b": lambda app: start_backup(app)}))
 
 
@@ -857,14 +898,30 @@ def start_backup(app, _item=None) -> None:
 
 
 class Backups(ListScreen):
-    hint = "F/X move  Enter options  Esc back"
+    hint = "F/X move  Enter options  O sort  Esc back"
 
     def __init__(self):
         super().__init__("Backups", empty="No backups yet. Choose Create backup on the first screen.")
 
     def items(self, app) -> list[Item]:
-        return [Item(s.meta.get("when") or s.name, s.meta.get("identity") or "", backup_options, s)
-                for s in app.store.backups()]
+        saved = app.store.backups()  # newest first
+        mode = app.filters["backup_sort"]
+        if mode == "oldest":
+            saved.reverse()
+        elif mode == "firmware":
+            saved.sort(key=lambda s: (s.meta.get("identity") or "~").lower())
+        return [Item(s.meta.get("when") or s.name, s.meta.get("identity") or "", backup_options, s) for s in saved]
+
+    def right(self, app) -> str:
+        return app.filters["backup_sort"]
+
+    def key(self, app, key: str) -> None:
+        if key in ("o", "O"):
+            f = app.filters
+            f["backup_sort"] = BACKUP_SORTS[(BACKUP_SORTS.index(f["backup_sort"]) + 1) % len(BACKUP_SORTS)]
+            self.sel = 0
+        else:
+            super().key(app, key)
 
 
 def backup_options(app, item: Item) -> None:
@@ -889,7 +946,7 @@ def backup_options(app, item: Item) -> None:
     info = "File: %s\nWhen: %s\nWas running: %s\nFlash chip: %s\nChip ID: %s\nSHA-256: %s..." % (
         saved.path, saved.meta.get("when", "?"), saved.meta.get("identity") or "?", saved.meta.get("flash", "?"),
         saved.meta.get("uid") or "?", (saved.meta.get("sha256") or "?")[:16])
-    app.push(ListScreen(saved.name, [
+    app.push(ListScreen(saved.name, icon="backup", items=[
         Item("Restore on FM-1", "", lambda app, _i: app.push(
             Confirm("Restore?", text, start, verb="restore"))),
         Item("Details", "", lambda app, _i: app.push(TextScreen(saved.name, info))),
@@ -991,8 +1048,26 @@ def home_items(app) -> list[Item]:
     ]
 
 
+# label of a home item -> (icon, the short name on its tile, what it does)
+HOME_TILES = {
+    "Discover": ("discover", "Discover", "Browse and install firmwares"),
+    "Downloaded": ("saved", "Saved", "Firmwares already on this Zero"),
+    "FM-1 device": ("device", "My FM-1", "Check what is plugged in"),
+    "Create backup": ("backup", "Back up", "Copy the FM-1's flash to this Zero"),
+    "Backups": ("backups", "Backups", "Your saved copies"),
+    "Refresh catalogue": ("refresh", "Refresh", "Read the Hub's list again"),
+    "Storage": ("storage", "Storage", "Space, and where files are kept"),
+    "Last operation": ("history", "History", "What was done last"),
+    "Quit": ("quit", "Quit", "Leave the app"),
+}
+TILE_COLS, TILE_GAP, TILE_HOME_H = 3, 4, 36
+
+
 class Home(ListScreen):
-    hint = "F/X move  Enter open"
+    """The first screen: a tile for each thing to do, an icon and a short name, with what the chosen one does
+    written underneath. F and X move by a row, Z and C by one."""
+
+    hint = "F/X/Z/C move  Enter open"
 
     def __init__(self):
         super().__init__("FM-1 Zero")
@@ -1003,8 +1078,40 @@ class Home(ListScreen):
     def right(self, app) -> str:
         return "v" + __version__
 
+    def draw(self, app, c: Canvas) -> None:
+        items = self.items(app)
+        self.sel = max(0, min(self.sel, len(items) - 1))
+        c.frame(self.title, self.hint, self.right(app), icon="device")
+        tw = (W - TILE_GAP * (TILE_COLS + 1)) // TILE_COLS
+        for n, item in enumerate(items):
+            icon, short, _what = HOME_TILES.get(item.label, ("chip", item.label, ""))
+            x = TILE_GAP + (n % TILE_COLS) * (tw + TILE_GAP)
+            y = TOP + 3 + (n // TILE_COLS) * (TILE_HOME_H + TILE_GAP)
+            chosen = n == self.sel
+            c.d.rectangle([x, y, x + tw - 1, y + TILE_HOME_H - 1], fill=BAR, outline=ACCENT if chosen else None,
+                          width=2)
+            icons.paste(c.img, icon, x + 7, y + 7, 22, ACCENT if chosen else DIM)
+            c.d.text((x + 35, y + 9), c.fit(short, tw - 39), font=c.font, fill=FG if chosen else DIM)
+        if items:
+            item = items[self.sel]
+            _icon, _short, what = HOME_TILES.get(item.label, ("chip", item.label, ""))
+            value = item.right
+            room = W - 12 - (c.small.getlength(value) + 8 if value else 0)
+            c.d.text((6, H - 29), c.fit(what, room, c.small), font=c.small, fill=DIM)
+            if value:
+                c.d.text((W - 6 - c.small.getlength(value), H - 29), value, font=c.small, fill=FG)
+
     def key(self, app, key: str) -> None:
-        if key != "esc":
+        count = max(1, len(self.items(app)))
+        if key in UP:
+            self.sel = (self.sel - TILE_COLS) % count
+        elif key in DOWN:
+            self.sel = (self.sel + TILE_COLS) % count
+        elif key in LEFT:
+            self.sel = (self.sel - 1) % count
+        elif key in RIGHT:
+            self.sel = (self.sel + 1) % count
+        elif key != "esc":
             super().key(app, key)
 
 
@@ -1014,7 +1121,8 @@ class App:
         self.store = store or Store()
         cache = catalogue.read_cache(self.store.catalogue_path)
         self.entries = (cache or {}).get("entries", [])
-        self.filters = {"search": "", "kind": "", "sort": "popular", "favs": False, "unit": False}
+        self.filters = {"search": "", "kind": "", "sort": "popular", "favs": False, "unit": False,
+                        "saved_sort": "name", "backup_sort": "newest"}
         self.canvas = Canvas()
         self.thumbs = Thumbs(self.store)
         self.stack: list[Screen] = [Home()]

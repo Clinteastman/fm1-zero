@@ -63,6 +63,7 @@ class UiTests(unittest.TestCase):
             written, data = job(r)
             return device.Result(r.chip, "FM-1_015", "FM-1_123", written, data)
 
+        self.session = session
         device.install = lambda package, chip, report, say: session(
             lambda r: (jobs.install(r, package, chip, report), b""))
         device.backup = lambda report, say: session(lambda r: (0, jobs.backup(r, report)))
@@ -137,7 +138,7 @@ class UiTests(unittest.TestCase):
         finish(app)
         self.assertEqual(app.store.backups()[0].path.read_bytes(), before)
         fake.flash[0x10000:0x11000] = bytes(0x1000)
-        press(app, "esc", "down", "down", "down", "down", "enter", "enter", "enter", "hold:enter")
+        press(app, "esc", "down", "right", "enter", "enter", "enter", "hold:enter")  # tiles: a row down, one across = Backups
         clock.t += 2.1
         app.step(0)
         finish(app)
@@ -296,18 +297,30 @@ class UiTests(unittest.TestCase):
         self.assertIsInstance(app.stack[-1], ui.Home)
         self.assertEqual(fake.erased, [])
 
-    def test_unknown_bootloader_sends_you_to_check_first(self):
+    def test_first_install_checks_the_fm1_on_the_way_and_carries_on(self):
         app, _ = make_app(self.dir.name)
+        fake = FakeFm1()
+        self.fake_device(fake)
+        keep = device.identify
+
+        def identify(say):
+            result = keep_session(lambda r: (0, b""))
+            result.bootloader, result.bootloader_text = boot.OPEN, "m-bootloader 2.4"
+            return result
+
+        keep_session = self.session
+        device.identify = identify
+        self.addCleanup(lambda: setattr(device, "identify", keep))
         app.store.state["bootloader"] = ""
         saved = app.store.add_package(app.entries[0], FWSC)
-        device.status = lambda: ("firmware", "FM-1_015")
         ui.ask_install(app, saved)
-        self.assertEqual(app.stack[-1].title, "Check the FM-1 first")
-        press(app, "enter")
-        self.assertEqual(app.stack[-1].title, "FM-1 device")
-        app.home()
-        ui.ask_install(app, saved)
-        press(app, "i")
+        self.assertEqual(app.stack[-1].title, "Checking your FM-1")
+        finish(app)
+        self.assertEqual(app.stack[-1].title, "Install?")  # no "device" page to back out of
+        self.assertEqual(app.store.state["bootloader"], boot.OPEN)  # remembered
+        self.assertEqual(fake.erased, [])
+        app.pop()
+        ui.ask_install(app, saved)  # and the next time there is no check at all
         self.assertEqual(app.stack[-1].title, "Install?")
 
     def test_installed_firmware_keeps_the_name_it_was_chosen_by(self):
@@ -346,16 +359,17 @@ class UiTests(unittest.TestCase):
         """Letters, Enter, Esc and Tab only: no arrows, no ; . or /."""
         app, _ = make_app(self.dir.name)
         press(app, "x", "x", "f")
-        self.assertEqual(app.stack[-1].sel, 1)  # down, down, up
+        self.assertEqual(app.stack[-1].sel, 3)  # the home tiles move by rows of three: down, down, up
         press(app, "f", "enter")
         self.assertIsInstance(app.stack[-1], ui.Browse)
         press(app, "x")
         self.assertEqual(app.stack[-1].sel, 1)
         press(app, "o")
         self.assertEqual(app.filters["sort"], "name")
+        self.assertEqual(app.stack[-1].sel, 0)  # a new order starts from the top
         press(app, "g", "c", "z", "c")
         self.assertIsInstance(app.stack[-1], ui.Grid)
-        self.assertEqual(app.stack[-1].sel, 2)
+        self.assertEqual(app.stack[-1].sel, 1)
         press(app, "g", "tab")
         self.assertTrue(app.stack[-1].downloaded)
         press(app, "esc")
@@ -407,13 +421,78 @@ class UiTests(unittest.TestCase):
     def test_every_footer_fits_the_screen_in_the_bigger_type(self):
         c = ui.Canvas()
         for text in (ui.Home.hint, ui.Browse.hint, ui.Browse.hint2, ui.Grid.hint, ui.Backups.hint,
-                     "F/X move  Enter open  Esc back", "S find  L fav  Tab Discover",
+                     "F/X move  Enter open  Esc back", "S find  L fav  O sort  Tab Discover", ui.Backups.hint,
                      "R run it again  Esc leave it half written"):
             width = 6
             for part in text.split("  "):
                 key, _, what = part.strip().partition(" ")
                 width += c.small.getlength(key.replace("_", " ") + " " + what) + 9
             self.assertLess(width - 9, ui.W - 4, text)
+    def test_download_and_install_goes_on_to_the_install_question(self):
+        app, _ = make_app(self.dir.name)
+        fake = FakeFm1()
+        self.fake_device(fake)
+        e = app.entries[0]
+        e["downloadable"] = True
+        keep = catalogue.download
+        catalogue.download = lambda entry, progress=None: FWSC
+        self.addCleanup(lambda: setattr(catalogue, "download", keep))
+        ui.entry_options(app, e)
+        self.assertEqual([i.label for i in app.stack[-1].items(app)][:2], ["Download and install", "Download only"])
+        press(app, "enter")  # the first one
+        finish(app)
+        self.assertEqual(app.stack[-1].title, "Install?")  # asked, not done: the hold still has to happen
+        self.assertEqual(fake.erased, [])
+        press(app, "esc")
+        self.assertEqual(fake.erased, [])
+        self.assertTrue(app.store.package_for(e))
+    def test_home_is_tiles_moved_by_row_and_by_one(self):
+        app, _ = make_app(self.dir.name)
+        home = app.stack[-1]
+        press(app, "x")
+        self.assertEqual(home.sel, 3)  # down a row of three
+        press(app, "c")
+        self.assertEqual(home.sel, 4)
+        press(app, "z", "f")
+        self.assertEqual(home.sel, 0)
+        press(app, "z")
+        self.assertEqual(home.sel, len(home.items(app)) - 1)  # wraps round to Quit
+
+    def test_every_icon_draws_and_every_header_has_one(self):
+        from fm1zero import icons
+        for name in icons.NAMES:
+            im = icons.render(name, 22, "#ffb000")
+            self.assertEqual(im.size, (22, 22))
+            self.assertGreater(len(set(im.tobytes())), 2, name)  # something was drawn
+        self.assertEqual(icons.icon_for("Felucca 1.8.2"), "chip")
+        self.assertEqual(icons.icon_for("Installing"), "install")
+        self.assertEqual(icons.icon_for("Failed"), "failed")
+    def test_o_cycles_the_sort_on_every_list_and_starts_from_the_top(self):
+        app, _ = make_app(self.dir.name)
+        app.push(ui.Browse(False))
+        seen = [app.filters["sort"]]
+        for _ in catalogue.SORTS:
+            press(app, "x", "o")
+            self.assertEqual(app.stack[-1].sel, 0)
+            seen.append(app.filters["sort"])
+        self.assertEqual(seen[0], seen[-1])  # round the full circle
+        self.assertEqual(set(seen), set(catalogue.SORTS))
+        app.filters["sort"] = "maker"
+        authors = [i.data["author"].lower() or "~" for i in app.stack[-1].items(app)]
+        self.assertEqual(authors, sorted(authors))
+        app.filters["sort"] = "ready"
+        ready = [i.data["downloadable"] for i in app.stack[-1].items(app)]
+        self.assertEqual(ready, sorted(ready, reverse=True))  # installable first
+        app.pop()
+        app.push(ui.Browse(True))
+        press(app, "o")
+        self.assertEqual(app.filters["saved_sort"], "newest")
+        self.assertIn("newest", app.stack[-1].right(app))
+        app.pop()
+        app.push(ui.Backups())
+        for want in ("oldest", "firmware", "newest"):
+            press(app, "o")
+            self.assertEqual(app.filters["backup_sort"], want)
 
 if __name__ == "__main__":
     unittest.main()

@@ -263,7 +263,7 @@ def download(entry: dict, opener=urllib.request.urlopen, progress=lambda done, t
     return raw
 
 
-SORTS = ("popular", "name")
+SORTS = ("popular", "name", "maker", "ready")
 
 
 def view(entries: list[dict], search: str = "", kind: str = "", chip: str = "", sort: str = "popular",
@@ -287,6 +287,10 @@ def view(entries: list[dict], search: str = "", kind: str = "", chip: str = "", 
         out.append(e)
     if sort == "name":
         out.sort(key=lambda e: e["name"].lower())
+    elif sort == "maker":  # by who made it, then by name
+        out.sort(key=lambda e: (e["author"].lower() or "~", e["name"].lower()))
+    elif sort == "ready":  # what can be installed here first, then by how popular
+        out.sort(key=lambda e: (not e["downloadable"], e["installs"] is None, -(e["installs"] or 0), e["name"].lower()))
     else:
         out.sort(key=lambda e: (e["installs"] is None, -(e["installs"] or 0), e["name"].lower()))
     out.sort(key=lambda e: e["id"] not in favourites)
